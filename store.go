@@ -1,28 +1,24 @@
-// The blobstore package implements a named-blob storage
+// The blobstore package implements a blob storage
 // system layered on top of MongoDB's GridFS.
-//
-// Files with the same content share storage.
+// Blobs with the same content share storage.
 package blobstore
 
 import (
-	"crypto/rand"
 	"crypto/sha256"
-	//	"hash/fnv"
+//	"hash/fnv"
 	"fmt"
 	"io"
-	//	"log"
+	"log"
+	"time"
 
 	"labix.org/v2/mgo"
-	"labix.org/v2/mgo/bson"
-	//	"github.com/zeebo/sbloom"
+//	"github.com/zeebo/sbloom"
 )
 
 // Storage represents a collection of named blobs held in a mongo
 // database.
 type Storage struct {
 	fs           *mgo.GridFS
-	catalog      *mgo.Collection
-	gcGeneration *mgo.Collection
 }
 
 // New returns a new storage value that stores its values in the
@@ -31,42 +27,11 @@ type Storage struct {
 func New(db *mgo.Database, collectionPrefix string) *Storage {
 	return &Storage{
 		fs:           db.GridFS(collectionPrefix + ".grid"),
-		catalog:      db.C(collectionPrefix + ".catalog"),
-		gcGeneration: db.C(collectionPrefix + ".gcgen"),
 	}
-}
-
-type catalogDoc struct {
-	Name    string `bson:"_id"`
-	BlobRef string `bson:"blobref"`
 }
 
 func hashName(h string) string {
 	return "blob-" + h
-}
-
-func randomName() (string, error) {
-	var data []byte
-	if _, err := rand.Read(data); err != nil {
-		return "", err
-	}
-	return fmt.Sprintf("%x", data), nil
-}
-
-var generationInc = mgo.Change{
-	Update: bson.D{{"$inc", bson.D{{"generation", 1}}}},
-	Upsert: true,
-}
-
-func (s *Storage) incrementGCGeneration() (int64, error) {
-	var result struct {
-		Generation int64
-	}
-	_, err := s.gcGeneration.Find(nil).Apply(generationInc, &result)
-	if err != nil {
-		return 0, err
-	}
-	return result.Generation, nil
 }
 
 // Create creates a file with the given name. The sha256Hash
@@ -75,59 +40,51 @@ func (s *Storage) incrementGCGeneration() (int64, error) {
 //
 // If a file with the same content does not exist in the store,
 // it will be read from the given reader.
-func (s *Storage) Create(name string, sha256Hash string, r io.Reader) (err error) {
-	//	_, err := s.incrementGCGeneration()
-	//	if err != nil {
-	//		return err
-	//	}
-
+func (s *Storage) Create(sha256Hash string, r io.Reader) (err error) {
 	blobRef := hashName(sha256Hash)
 	f, err := s.fs.Open(blobRef)
 	if err == nil {
-		//		find doc with ref > 0, set ref to 1
 		// The blob already exists
+
+		// TODO change last reference time to current time.
 		f.Close()
-		return nil
+		return checkHash(r, sha256Hash)
 	}
 	f, err = s.fs.Create(blobRef)
 	if err != nil {
 		return err
 	}
 	defer func() {
-		if f != nil {
-			f.Close()
-		}
 		if err != nil {
 			// TODO use Abort method when it's implemented
-			//			s.fs.Remove(fileId)
+			f.SetName("aborted")
+		}
+		closeErr := f.Close()
+		if closeErr != nil {
+			if err == nil {
+				err = closeErr
+			} else {
+				log.Printf("failed to close file after error: %v", closeErr)
+			}
 		}
 	}()
 	if err := copyAndCheckHash(f, r, sha256Hash); err != nil {
 		return err
 	}
 	f.SetName(blobRef)
-
-	if err := f.Close(); err != nil {
-		f = nil
-		if !isDuplicateIndexError(err) {
-			return err
-		}
-		// someone else has created the blob at the same time as us
-		// so remove the duplicate data but carry on to create the file.
-		//		s.fs.Remove(fileId)
-	}
-	f = nil
-
-	_, err = s.catalog.UpsertId(name, bson.D{{"$set", bson.D{{"blobref", blobRef}}}})
-	if err != nil {
-		return fmt.Errorf("cannot update catalog: %v", err)
-	}
 	return nil
 }
 
-func isDuplicateIndexError(err error) bool {
-	// TODO
-	return false
+func checkHash(r io.Reader, sha256Hash string) error {
+	hash := sha256.New()
+	if _, err := io.Copy(hash, r); err != nil {
+		return err
+	}
+	gotSum := fmt.Sprintf("%x", hash.Sum(nil))
+	if gotSum != sha256Hash {
+		return fmt.Errorf("hash mismatch - you don't have the right data!")
+	}
+	return nil
 }
 
 func copyAndCheckHash(w io.Writer, r io.Reader, sha256Hash string) error {
@@ -149,33 +106,31 @@ type ReadSeekCloser interface {
 }
 
 // Open opens the file with the given name.
-func (s *Storage) Open(name string) (ReadSeekCloser, error) {
-	var doc catalogDoc
-
-	err := s.catalog.Find(bson.D{{"_id", name}}).One(&doc)
-	if err != nil {
-		return nil, fmt.Errorf("cannot find name: %v", err)
-	}
-	f, err := s.fs.Open(doc.BlobRef)
+func (s *Storage) Open(sha256hash string) (ReadSeekCloser, error) {
+	f, err := s.fs.Open(hashName(sha256hash))
 	if err != nil {
 		return nil, err
 	}
 	return f, nil
 }
 
-// Remove removes the file with the given name.
-func (s *Storage) Remove(name string) error {
-	return s.catalog.Remove(bson.D{{"_id", name}})
-}
-
-// CollectGarbage scans through all files and blobs,
-// and deletes blobs that are unreferenced by any
-// file.
-func (s *Storage) CollectGarbage() error {
-	//	filter := sbloom.Filter(fnv.New64(), 128)
-	//
-	//	err := s.catalog.Find(nil).Batch(5000)
-	//
-	//	find all docs with no references
+// CollectGarbage reads blob references from the
+// given channel until it is closed, and then deletes any blobs that
+// are not mentioned that have not been referenced
+// since the given time.
+func (s *Storage) CollectGarbage(refs <-chan string, before time.Time) error {
+//	filter := sbloom.Filter(fnv.New64(), 128)
+//	for ref := range refs {
+//		filter.Add([]byte(ref))
+//	}
+//	err := s.fs.Find(nil).Batch(5000).Filter(time < before)
+//	iterate {
+//		if name == "aborted" {
+//			delete
+//		}
+//		if item not found {
+//			delete item if time < before
+//		}
+//	}
 	return nil
 }
