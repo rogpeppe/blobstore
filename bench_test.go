@@ -2,14 +2,14 @@ package blobstore_test
 
 import (
 	"crypto/sha256"
-	"io"
 	"fmt"
-	"github.com/juju/testing"
-	"github.com/rogpeppe/blobstore"
-	gc "launchpad.net/gocheck"
 	"github.com/juju/juju/state/storage"
 	jujuTxn "github.com/juju/juju/state/txn"
+	"github.com/juju/testing"
+	"github.com/rogpeppe/blobstore"
+	"io"
 	"labix.org/v2/mgo/txn"
+	gc "launchpad.net/gocheck"
 )
 
 type benchmarkSuite struct {
@@ -30,8 +30,9 @@ func (s *benchmarkSuite) BenchmarkCreate(c *gc.C) {
 		src := newDataSource(int64(i), fileSize)
 		io.Copy(hasher, src)
 		hash := hex(hasher.Sum(nil))
-		err := store.Create(hash, newDataSource(int64(i), fileSize))
+		exists, err := store.Create(hash, newDataSource(int64(i), fileSize))
 		c.Assert(err, gc.IsNil)
+		c.Assert(exists, gc.Equals, false)
 	}
 }
 
