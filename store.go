@@ -42,6 +42,20 @@ type refCountMeta struct {
 	RefCount int
 }
 
+// Check reports whether a blob with the given hash currently
+// exists in the storage.
+func (s *Storage) Check(sha256Hash string) (bool, error) {
+	f, err := s.fs.Open(hashName(sha256Hash))
+	if err != nil && err != mgo.ErrNotFound {
+		return false, err
+	}
+	if err == nil {
+		f.Close()
+		return true, nil
+	}
+	return false, nil
+}
+
 // Create creates a blob with the given name, reading
 // the contents from the given reader. The sha256Hash
 // parameter holds the sha256 hash of the blob's contents,
