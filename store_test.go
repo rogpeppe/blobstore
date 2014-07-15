@@ -42,13 +42,15 @@ func (s *storeSuite) TestCreateOpenCheck(c *gc.C) {
 	c.Assert(err, gc.IsNil)
 	c.Assert(gotData, gc.DeepEquals, data)
 
-	ok, err := store.Check(hash)
+	ok, size, err := store.Check(hash)
 	c.Assert(err, gc.IsNil)
 	c.Assert(ok, gc.Equals, true)
+	c.Assert(size, gc.Equals, int64(len(data)))
 
-	ok, err = store.Check(hashOf([]byte("foo")))
+	ok, size, err = store.Check(hashOf([]byte("foo")))
 	c.Assert(err, gc.IsNil)
 	c.Assert(ok, gc.Equals, false)
+	c.Assert(size, gc.Equals, int64(0))
 }
 
 func (s *storeSuite) TestInvalidHash(c *gc.C) {

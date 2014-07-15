@@ -44,16 +44,17 @@ type refCountMeta struct {
 
 // Check reports whether a blob with the given hash currently
 // exists in the storage.
-func (s *Storage) Check(sha256Hash string) (bool, error) {
+func (s *Storage) Check(sha256Hash string) (exists bool, size int64, err error) {
 	f, err := s.fs.Open(hashName(sha256Hash))
 	if err != nil && err != mgo.ErrNotFound {
-		return false, err
+		return false, 0, err
 	}
 	if err == nil {
+		size := f.Size()
 		f.Close()
-		return true, nil
+		return true, size, nil
 	}
-	return false, nil
+	return false, 0, nil
 }
 
 // Create creates a blob with the given name, reading
