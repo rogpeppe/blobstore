@@ -42,6 +42,21 @@ type refCountMeta struct {
 	RefCount int
 }
 
+// Check reports whether a blob with the given hash currently
+// exists in the storage.
+func (s *Storage) Check(sha256Hash string) (exists bool, size int64, err error) {
+	f, err := s.fs.Open(hashName(sha256Hash))
+	if err != nil && err != mgo.ErrNotFound {
+		return false, 0, err
+	}
+	if err == nil {
+		size := f.Size()
+		f.Close()
+		return true, size, nil
+	}
+	return false, 0, nil
+}
+
 // Create creates a blob with the given name, reading
 // the contents from the given reader. The sha256Hash
 // parameter holds the sha256 hash of the blob's contents,
@@ -158,18 +173,6 @@ func (s *Storage) Remove(sha256Hash string) error {
 		return fmt.Errorf("cannot rename file before deletion: %v", err)
 	}
 	return s.fs.Remove(newName)
-}
-
-func checkHash(r io.Reader, sha256Hash string) error {
-	hash := sha256.New()
-	if _, err := io.Copy(hash, r); err != nil {
-		return err
-	}
-	gotSum := fmt.Sprintf("%x", hash.Sum(nil))
-	if gotSum != sha256Hash {
-		return fmt.Errorf("hash mismatch - you don't have the right data!")
-	}
-	return nil
 }
 
 func copyAndCheckHash(w io.Writer, r io.Reader, sha256Hash string) error {
