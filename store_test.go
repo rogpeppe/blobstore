@@ -26,7 +26,7 @@ type storeSuite struct {
 
 var _ = gc.Suite(&storeSuite{})
 
-func (s *storeSuite) TestCreateOpen(c *gc.C) {
+func (s *storeSuite) TestCreateOpenCheck(c *gc.C) {
 	store := blobstore.New(s.Session.DB("a-database"), "prefix")
 
 	data := []byte(`some file data`)
@@ -41,6 +41,16 @@ func (s *storeSuite) TestCreateOpen(c *gc.C) {
 	gotData, err := ioutil.ReadAll(f)
 	c.Assert(err, gc.IsNil)
 	c.Assert(gotData, gc.DeepEquals, data)
+
+	ok, size, err := store.Check(hash)
+	c.Assert(err, gc.IsNil)
+	c.Assert(ok, gc.Equals, true)
+	c.Assert(size, gc.Equals, int64(len(data)))
+
+	ok, size, err = store.Check(hashOf([]byte("foo")))
+	c.Assert(err, gc.IsNil)
+	c.Assert(ok, gc.Equals, false)
+	c.Assert(size, gc.Equals, int64(0))
 }
 
 func (s *storeSuite) TestInvalidHash(c *gc.C) {
