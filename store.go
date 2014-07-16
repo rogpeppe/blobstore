@@ -175,18 +175,6 @@ func (s *Storage) Remove(sha256Hash string) error {
 	return s.fs.Remove(newName)
 }
 
-func checkHash(r io.Reader, sha256Hash string) error {
-	hash := sha256.New()
-	if _, err := io.Copy(hash, r); err != nil {
-		return err
-	}
-	gotSum := fmt.Sprintf("%x", hash.Sum(nil))
-	if gotSum != sha256Hash {
-		return fmt.Errorf("hash mismatch - you don't have the right data!")
-	}
-	return nil
-}
-
 func copyAndCheckHash(w io.Writer, r io.Reader, sha256Hash string) error {
 	sha256hash := sha256.New()
 	if _, err := io.Copy(io.MultiWriter(w, sha256hash), r); err != nil {
